@@ -28,6 +28,8 @@ apis rest graphql grpc sdk cli gui ide vscode vim neovim emacs nano code coding 
 rust golang kotlin swift ruby rails php laravel django flask fastapi spring boot maven gradle cargo pip
 pipenv poetry conda venv jupyter notebook pandas numpy scipy matplotlib tensorflow pytorch keras openai
 anthropic claude chatgpt gpt llm discord slack teams zoom notion figma jira confluence trello asana
+# 報告された英字の綴りを保持する (#145)。disco + で に分割しない。
+discode
 google youtube twitter facebook instagram amazon microsoft apple iphone ipad chrome firefox edge safari
 email gmail outlook excel word powerpoint onedrive dropbox admin root sudo chmod chown mkdir rmdir grep
 sed awk curl wget ssh scp sftp ftp tcp udp dns vpn url uri uuid token tokens auth oauth login logout
