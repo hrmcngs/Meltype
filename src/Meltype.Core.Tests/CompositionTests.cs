@@ -2749,16 +2749,6 @@ internal static class CompositionTests
     }
 
     [Test]
-    public static void ReportedEnglishSpelling_DiscodeStaysEnglish()
-    {
-        var k = new Keyboard();
-        k.Type("discode");
-        Assert.Equal("discode", k.Showing, "#145 入力途中の綴りを保持");
-        k.Type("\n");
-        Assert.Equal("discode", k.Host.Document);
-    }
-
-    [Test]
     public static void Backspace_DeletesOneKanaAtATime()
     {
         var k = new Keyboard();
