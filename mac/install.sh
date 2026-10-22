@@ -55,6 +55,6 @@ if swift ./select-input-source.swift; then
 else
     echo
     echo "Meltype を起動しました。入力メニューに Meltype が無いときは、"
-    echo "システム設定 → キーボード → 入力ソース (macOS 26 以降は「テキスト入力」の中) →「編集…」→「+」→ 日本語 → Meltype"
-    echo "から追加してください。"
+    echo "システム設定 → キーボード →（テキスト入力の）入力ソース →「編集…」→「+」→ 日本語 → Meltype"
+    echo "から追加してください。それでも出てこなければ、ログアウトしてログインし直してください。"
 fi
