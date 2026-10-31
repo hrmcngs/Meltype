@@ -101,13 +101,9 @@ public sealed class CompositionText
             var acronym = word.Any(char.IsAsciiLetterUpper) && word.All(c => char.IsAsciiLetterUpper(c) || char.IsAsciiDigit(c));
             var knownUnambiguous = word.Length >= 3 && _detector.IsKnownEnglishWord(word) && !_detector.Romaji.AnalyzeFragment(lower).IsValid;
             var properNoun = _detector.ProperNouns.Contains(lower) && (_units[^1].Raw != "-" || word.Any(char.IsAsciiLetterUpper) || !_detector.Romaji.AnalyzeFragment(lower).IsValid);
-            // かなにならずに残った子音だけの語 (p-hub の p、kyouhapt-query-digest の pt) の後の - は長音ではない。
-            // 前のかな (kyouha) は見ない。最後までかなになる語 (nn- の んー) は除く
-            var letters = new StringBuilder();
-            for (var i = _units.Count - 2; i >= 0 && _units[i].Raw.Length > 0 && _units[i].Kana == _units[i].Raw && _units[i].Raw.All(char.IsAsciiLetterLower); i--) letters.Insert(0, _units[i].Raw);
-            var consonantsOnly = letters.Length > 0 && letters.ToString().All(c => c is not ('a' or 'i' or 'u' or 'e' or 'o')) &&
-                                 _detector.Romaji.AnalyzeFragment(letters.ToString()) is not { IsValid: true, Partial: "" };
-            if (acronym || knownUnambiguous || properNoun || _units[^1].Raw == "-" && consonantsOnly)
+            // かなにならずに残った英字 (p-hub の p、kyouhapt-query-digest の t) の後の - は長音ではない。かなになった ん (n-to) の後は長音
+            var unconverted = _units[^2].Kana == _units[^2].Raw && _units[^2].Raw.All(char.IsAsciiLetterLower);
+            if (acronym || knownUnambiguous || properNoun || _units[^1].Raw == "-" && unconverted)
                 _units[^1] = _units[^1] with { Kana = _units[^1].Raw };
         }
         // … になった / の続きの / は、同じ … に足す (4〜6 個で ……、7〜9 個で ………: 3 個ごとに … を 1 つ増やす。issue #495)
