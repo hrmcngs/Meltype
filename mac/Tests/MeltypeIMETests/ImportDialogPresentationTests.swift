@@ -86,6 +86,31 @@ final class ImportDialogPresentationTests: XCTestCase {
         XCTAssertEqual(application.policy, .prohibited)
     }
 
+    func testImportRejectsControlCharactersAndCountsSkippedEntries() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("dictionary.plist")
+        var rows = [["shortcut": "かいしゃ", "phrase": "株式会社"],
+                    ["shortcut": "かいしゃ", "phrase": "株式会社"],
+                    ["shortcut": "えもじ", "phrase": "👩‍💻"]]
+        for value in Array(0...31) + Array(127...159) {
+            let control = String(UnicodeScalar(value)!)
+            rows.append(["shortcut": "あくせす", "phrase": "アクセス" + control + "X"])
+            rows.append(["shortcut": "あく" + control + "せす", "phrase": "アクセス"])
+        }
+        let data = try PropertyListSerialization.data(fromPropertyList: rows, format: .binary, options: 0)
+        try data.write(to: source)
+        let result = try MacUserDictionary.importFile(source, directory: directory.path)
+        XCTAssertEqual(result.added, 2)
+        XCTAssertEqual(result.skipped, rows.count - 2)
+        let contents = try String(contentsOf: directory.appendingPathComponent("userdict.txt"), encoding: .utf8)
+        XCTAssertEqual(contents, "かいしゃ\t株式会社\nえもじ\t👩‍💻\n")
+        let again = try MacUserDictionary.importFile(source, directory: directory.path)
+        XCTAssertEqual(again.added, 0)
+        XCTAssertEqual(again.skipped, rows.count)
+    }
+
     func testImportFailureRestoresPolicyAndPreservesExistingDictionary() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

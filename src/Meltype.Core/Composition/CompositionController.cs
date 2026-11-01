@@ -1681,6 +1681,9 @@ public sealed class CompositionController
                         if (!english.Contains(word)) english.Add(word);
                     }
                 }
+                // 記号だけの英語区間にも、同梱の記号候補 (... → …) を出す。
+                if (segment.Raw.All(c => !char.IsLetterOrDigit(c)))
+                    english = Distinct([.. english, .. _options.Candidates?.Lookup(segment.Raw) ?? []]);
                 var reading = RomajiReading(segment.Raw);
                 List<string> romaji = reading is null ? [] : JapaneseCandidates(reading, null);
                 clauses.Add(new Clause(segment.Raw, true, preferJapanese && romaji.Count > 0

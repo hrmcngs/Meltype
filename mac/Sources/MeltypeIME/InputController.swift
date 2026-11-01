@@ -257,8 +257,9 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
               let directory = NativeCore.shared.dataDirectory else { return }
         let alert = NSAlert()
         do {
-            let count = try MacUserDictionary.importFile(source, directory: directory)
-            alert.messageText = "ユーザー辞書に\(count)語を追加しました"
+            let result = try MacUserDictionary.importFile(source, directory: directory)
+            alert.messageText = "ユーザー辞書に\(result.added)語を追加しました"
+            alert.informativeText = "無効な項目・登録済みの項目を\(result.skipped)語飛ばしました。"
             NotificationCenter.default.post(name: Notification.Name("MeltypeUserDictionaryChanged"), object: nil)
         } catch {
             alert.messageText = "ユーザー辞書を取り込めませんでした"
