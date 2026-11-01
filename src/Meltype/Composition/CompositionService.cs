@@ -21,6 +21,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     private readonly Func<string> _font;
     private readonly Func<bool> _lightTheme;
     private readonly Func<double> _opacity;
+    private readonly Func<(string Japanese, string Direct, string Text)> _indicatorColors;
     private readonly Func<bool> _directMode;
     private readonly MsImeKanjiConverter _converter = new();
     private readonly KeyInjector _injector = new();
@@ -28,7 +29,11 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     // Mozc (同梱の mozc/meltype_mozc_helper.exe) と Microsoft IME を組み合わせた変換エンジン。
     private readonly MozcConverter _mozc = new(Path.Combine(AppContext.BaseDirectory, "mozc", "meltype_mozc_helper.exe"), Path.Combine(Config.AppPaths.DataDirectory, "mozc"));
     private HybridConverter _hybrid = null!;
-    private readonly IME.Imm32ImeController _imm32 = new();
+
+    // Zenzai (llama-server + zenz の GGUF)。設定で ON のときだけ、指定の場所・GPU の設定が変わるたびに作り直す (持ち主は ZenzaiHolder)
+    private readonly ZenzaiHolder _zenzai = new();
+    private ZenzaiConverter? CurrentZenzai(CompositionOptions options) =>
+        options.UseZenzai() ? _zenzai.Get(options.ZenzaiServerPath(), options.ZenzaiModelPath(), options.ZenzaiDevice()) : _zenzai.Get("", "");
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 100 };
     private int _pumpScheduled;
 
@@ -63,20 +68,58 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             Translations = options.Translations ?? TranslationDictionary.Load(),
             TranslationCandidates = options.TranslationCandidates,
             CandidateMeanings = options.CandidateMeanings,
+            ShowTypedKeys = options.ShowTypedKeys,
+            TabConversion = options.TabConversion,
+            ContinueAfterConversion = options.ContinueAfterConversion,
+            Learning = options.Learning,
+            SeparateKeyRoles = options.SeparateKeyRoles,
+            EnglishFirstInput = options.EnglishFirstInput,
+            ConsonantAbbreviations = options.ConsonantAbbreviations,
             Meanings = options.Meanings ?? MeaningDictionary.Load(),
             RomajiTypos = options.RomajiTypos ?? RomajiTypoCorrector.Load(detector.Romaji),
             CorrectTypos = options.CorrectTypos,
             SlashAsMiddleDot = options.SlashAsMiddleDot,
+            ZSymbols = options.ZSymbols,
             SpaceAroundEnglish = options.SpaceAroundEnglish,
+            SpaceAroundNumbers = options.SpaceAroundNumbers,
+            NumberKeysSelectCandidates = options.NumberKeysSelectCandidates,
+            ShiftSpaceHalfWidth = options.ShiftSpaceHalfWidth,
+            EnterCommitsAsShown = options.EnterCommitsAsShown,
+            AlphanumericKeyStartsAsTyped = options.AlphanumericKeyStartsAsTyped,
+            FullWidthParentheses = options.FullWidthParentheses,
+            FullWidthSlash = options.FullWidthSlash,
+            SquareBrackets = options.SquareBrackets,
+            EscStepsBack = options.EscStepsBack,
+            EscRevertsSelectedClause = options.EscRevertsSelectedClause,
+            FunctionKeysAffectSelectedClause = options.FunctionKeysAffectSelectedClause,
+            CompatibleShortcuts = options.CompatibleShortcuts,
+            PartialCommit = options.PartialCommit,
+            MacControlKeys = options.MacControlKeys,
+            CursorIntoBrackets = options.CursorIntoBrackets,
+            ControlKeyBindings = options.ControlKeyBindings,
+            CalculatorCandidates = options.CalculatorCandidates,
+            LogKeyIntervals = options.LogKeyIntervals,
+            LaughterAfterKana = options.LaughterAfterKana,
+            ContextualLearning = options.ContextualLearning,
+            FullWidthSpaceByDefault = options.FullWidthSpaceByDefault,
+            ShowCandidatesWhileTyping = options.ShowCandidatesWhileTyping,
+            GitHubIssueCandidates = options.GitHubIssueCandidates,
+            GitHubRepository = options.GitHubRepository,
+            GitHubTitles = options.GitHubTitles,
+            ClipboardCandidates = options.ClipboardCandidates,
             Punctuation = options.Punctuation,
             TranslationHistory = options.TranslationHistory ?? new TranslationHistory(Config.AppPaths.TranslationHistoryFile),
             Predictor = options.Predictor ?? new Predictor(new PhraseHistory(Config.AppPaths.PhraseHistoryFile), UserDictionary, History),
             Predictions = options.Predictions,
+            EnglishNamePredictions = options.EnglishNamePredictions,
         };
         Phrases = resolved.Predictor?.Phrases;
-        _hybrid = new HybridConverter(options.Engine, _mozc, _converter, reading => _windowsCandidates.Get(reading));
+        TranslationHistory = resolved.TranslationHistory;
+        _hybrid = new HybridConverter(options.Engine, _mozc, _converter, reading => _windowsCandidates.Get(reading), () => CurrentZenzai(options), _zenzai.Failed);
         _resolved = resolved;
         Controller = new CompositionController(Gate, detector, _hybrid, this, resolved);
+        // 直したときの「Zenzai を使う」も覚えておく (報告を開くまでに設定を変えても、直したときの設定で報告する。issue #1197)
+        Controller.Corrected += correction => Corrections.Add(correction with { Zenzai = options.UseZenzai() });
         if (options.Engine() != Config.ConversionEngine.System && _mozc.IsInstalled) _mozc.WarmUp();
         _showIndicator = options.ModeIndicator;
         _placement = options.Placement;
@@ -84,9 +127,15 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         _font = options.Font;
         _lightTheme = options.LightTheme;
         _opacity = options.Opacity;
+        _indicatorColors = options.ModeIndicatorColors;
         _directMode = options.DirectMode;
         var onFocus = options.ModeIndicatorOnFocus;
-        Focus.TextInputEntered += () => { if (onFocus()) ShowMode(!_directMode()); };
+        Focus.TextInputEntered += () =>
+        {
+            if (!onFocus()) return;
+            if (ShowModeOnFocus is { } show) show();
+            else ShowMode(!_directMode());
+        };
         Focus.CaptureLost += Abandon;
         Controller.Committed += text => Diagnostics.Log.Decision($"確定: {Diagnostics.Log.Text(text.Length > 20 ? text[..20] + "…" : text)}");
         _tick.Tick += (_, _) => Safely(() => Controller.Tick(Environment.TickCount64));
@@ -101,8 +150,13 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// Meltype IME (TSF) の入力欄 1 つ分の入力の本体を作る。辞書・学習データ・変換エンジンは変換ボックスと共有する
     /// (UI スレッドからだけ使うので排他は要らない)。英数状態は IME の ON/OFF で決まるので、フック用の英数の判定は外す。
     /// </summary>
-    public MeltypeSession CreateSession(Func<Config.Settings> settings) =>
-        new(_detector, _hybrid, _resolved with { DirectMode = () => false, ClassifyDirect = null, DirectDecided = null }, settings);
+    public MeltypeSession CreateSession(Func<Config.Settings> settings, bool directModeDetection = false) =>
+        new(_detector, _hybrid, _resolved with
+        {
+            DirectMode = () => false,
+            ClassifyDirect = directModeDetection ? _resolved.ClassifyDirect : null,
+            DirectDecided = null,
+        }, settings, directModeDetection);
 
     public CompositionController Controller { get; }
 
@@ -115,11 +169,20 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// <summary>ユーザーが英字 / かなに直した語の学習 (トレイの「学習データをリセット」で消す)。</summary>
     public LanguageMemory Languages { get; }
 
+    /// <summary>選んだ英訳の記録 (トレイの「学習データをリセット」で消す)。</summary>
+    public TranslationHistory? TranslationHistory { get; }
+
     /// <summary>予測変換のために覚えた、確定した語句。</summary>
     public PhraseHistory? Phrases { get; }
 
     /// <summary>ユーザー辞書 (トレイの「ユーザー辞書...」で編集する)。</summary>
     public UserDictionary UserDictionary { get; }
+
+    /// <summary>登録した定型文 (トレイの「定型文...」で編集する。;名前 + Space で入れる: issue #290)。</summary>
+    public SnippetStore Snippets { get; } = new(Config.AppPaths.SnippetsFile);
+
+    /// <summary>最近自分で直した誤判定 (メモリの中だけ。トレイの「直した誤判定を報告...」: issue #284)。</summary>
+    public CorrectionLog Corrections { get; } = new();
 
     private readonly CompositionDetector _detector;
 
@@ -135,7 +198,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// <summary>ユーザー辞書の登録画面用: 語の読みを推測する (かなならそのまま、漢字は Microsoft IME の逆変換)。分からなければ空。</summary>
     public string GuessReading(string word)
     {
-        if (word.All(c => c is >= 'ぁ' and <= 'ゖ' or >= 'ァ' and <= 'ヶ' or 'ー')) return new string(word.Select(c => c is >= 'ァ' and <= 'ヶ' ? (char)(c - 0x60) : c).ToArray());
+        if (word.All(c => KanaChars.IsHiraganaOrLongMark(c) || KanaChars.IsKatakana(c))) return KanaChars.ToHiragana(word);
         try
         {
             return _converter.Reading(word) ?? "";
@@ -171,6 +234,13 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             Volatile.Write(ref _pumpScheduled, 0);
             Safely(Controller.Pump);
         });
+    }
+
+    /// <summary>フックのスレッドから、UI スレッドで行う処理を頼む (定型文を入れる: issue #290)。</summary>
+    public void Post(Action action)
+    {
+        if (!_invoker.IsHandleCreated || _invoker.IsDisposed) return;
+        _invoker.BeginInvoke(() => Safely(action));
     }
 
     /// <summary>
@@ -224,7 +294,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         if (_invoker.IsHandleCreated && !_invoker.IsDisposed) _invoker.BeginInvoke(Controller.ResetContext);
     }
 
-    /// <summary>自動切替を止めたときなど。未確定の内容を確定し、残りの入力を通す。</summary>
+    /// <summary>Meltype を止めたときなど。未確定の内容を確定し、残りの入力を通す。</summary>
     public void Flush()
     {
         if (!InputAllowed())
@@ -255,7 +325,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         // 再変換のときは、IME の逆変換で出てくる読みを使う。
         _reconversionSelection = null;
         if (Focus.SelectedText() is not { } text) return null;
-        var reading = GuessReading(text);
+        // ローマ字のまま入った文 (kyouhaiitenki) は、逆変換せずにそのまま渡す (Meltype の判定で日本語にする: issue #288)
+        var reading = CompositionController.IsRomajiText(text) ? text : GuessReading(text);
         if (string.IsNullOrWhiteSpace(reading))
         {
             Diagnostics.Log.Info("再変換: 選択文字の読みを取得できませんでした。");
@@ -279,6 +350,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         return true;
     }
 
+    /// <summary>入力欄にフォーカスが移ったときに、次に打つキーのモード (あ / A) を出す (フォーカスを調べるスレッドから呼ばれる)。null なら英数 / 日本語 をそのまま出す。</summary>
+    public Action? ShowModeOnFocus { get; set; }
+
     /// <summary>前面のアプリで、確定した文字を貼り付けで入れるか (設定の「貼り付けで入力するアプリ」)。</summary>
     public Func<bool> PasteCommit { get; set; } = () => false;
 
@@ -293,17 +367,14 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             return;
         }
         var inputs = new List<Native.INPUT>(text.Length * 2);
-        foreach (var c in text)
-        {
-            inputs.Add(UnicodeInput(c, up: false));
-            inputs.Add(UnicodeInput(c, up: true));
-        }
-        var array = inputs.ToArray();
-        Native.SendAll(array, "確定文字列の入力");
+        AddUnicodeText(inputs, text);
+        Native.SendAll(inputs.ToArray(), "確定文字列の入力");
     }
 
-    private IDataObject? _savedClipboard;
+    private DataObject? _savedClipboard;
     private System.Windows.Forms.Timer? _restoreClipboard;
+    /// <summary>貼る文字を入れた直後のクリップボードの番号。戻すときに変わっていたら、ほかのアプリかユーザーが入れたものなので戻さない</summary>
+    private uint _pastedSequence;
 
     /// <summary>Windows のクリップボード履歴に保持しない</summary>
     private static readonly string[] ClipboardHistoryExclusions =
@@ -318,9 +389,11 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         if (text.Length == 0) return true;
         try
         {
-            if (_restoreClipboard is null) _savedClipboard = Clipboard.GetDataObject();
-            else _restoreClipboard.Stop();
+            // 前の貼り付けのあとにユーザーがコピーしていたら、戻す中身をそれに取り直す
+            if (_restoreClipboard is null || Native.GetClipboardSequenceNumber() != _pastedSequence) _savedClipboard = CopyClipboard();
+            _restoreClipboard?.Stop();
             Clipboard.SetDataObject(PasteData(text), copy: true);
+            _pastedSequence = Native.GetClipboardSequenceNumber();
             KeyInjector.SendShortcut(VirtualKeys.Control, 0x56); // Ctrl+V
             _restoreClipboard ??= new System.Windows.Forms.Timer { Interval = 500 };
             _restoreClipboard.Tick -= RestoreClipboard;
@@ -331,11 +404,13 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         catch (Exception ex) when (ex is ExternalException or System.Threading.ThreadStateException)
         {
             Diagnostics.Log.Warn($"クリップボードを使えないので、1 文字ずつ送ります: {ex.Message}");
+            // 前の貼り付けで止めた復元を動かし直す (止めたままだと元の中身に戻らない)
+            _restoreClipboard?.Start();
             return false;
         }
     }
 
-    private static DataObject PasteData(string text)
+    internal static DataObject PasteData(string text)
     {
         var data = new DataObject();
         data.SetText(text);
@@ -346,6 +421,24 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         return data;
     }
 
+    /// <summary>
+    /// 今のクリップボードの中身を、形式ごとに取り出して写す (戻すときに使う)。
+    /// Clipboard.GetDataObject() は中身のコピーではなく、そのときのクリップボードを読みに行くものを返すので、
+    /// 別の中身を入れたあとにそれで戻しても元に戻らない。取り出せない形式は戻さない。中身が無ければ null。
+    /// </summary>
+    internal static DataObject? CopyClipboard()
+    {
+        if (Clipboard.GetDataObject() is not { } current) return null;
+        var copy = new DataObject();
+        foreach (var format in current.GetFormats(autoConvert: false))
+        {
+            // 画像 (Bitmap) は autoConvert: false だと取り出せない
+            try { if ((current.GetData(format, autoConvert: false) ?? current.GetData(format, autoConvert: true)) is { } data) copy.SetData(format, autoConvert: false, data); }
+            catch { }
+        }
+        return copy.GetFormats(autoConvert: false).Length > 0 ? copy : null;
+    }
+
     private void RestoreClipboard(object? sender, EventArgs e)
     {
         var timer = _restoreClipboard;
@@ -353,7 +446,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         timer?.Dispose();
         try
         {
-            if (_savedClipboard is { } saved) Clipboard.SetDataObject(saved, copy: true);
+            if (Native.GetClipboardSequenceNumber() != _pastedSequence) Diagnostics.Log.Info("貼り付けのあとにクリップボードが変わったので、元の中身に戻しません。");
+            else if (_savedClipboard is { } saved) Clipboard.SetDataObject(saved, copy: true);
             else Clipboard.Clear();
         }
         catch (ExternalException ex)
@@ -374,9 +468,9 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         {
             if (!InputAllowed()) return;
             if (IME.ImeTarget.FromForeground() is not { } target) return;
-            var state = _imm32.GetState(target);
+            var state = IME.Imm32ImeController.GetState(target);
             if (state.Mode != IME.ImeMode.Open) return;
-            var closed = _imm32.TrySetOpen(target, false, null, 150);
+            var closed = IME.Imm32ImeController.TrySetOpen(target, false, null, 150);
             Diagnostics.Log.Warn($"確定時に Microsoft IME が ON になっていました ({state}) → {(closed ? "OFF にしてから入力します" : "OFF にできませんでした")}。");
         }
         catch (Exception ex)
@@ -403,6 +497,8 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     public void DeleteBackward(int count)
     {
         if (count <= 0) return;
+        // Microsoft IME が ON のままだと、BackSpace と後から送る文字の順番が入れ替わることがある (issue #227: wanI t)
+        EnsureSystemImeClosed();
         for (var i = 0; i < count; i++) KeyReplayed?.Invoke(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
         var events = new List<KeyEvent>(count * 2);
         for (var i = 0; i < count; i++)
@@ -411,6 +507,54 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             events.Add(new KeyEvent(VirtualKeys.Back, 0, false, true, false, 0));
         }
         _injector.Inject(events);
+    }
+
+    /// <summary>
+    /// 定型文を入れる: 打った ;名前 (count 文字) を消してから text を入れる (issue #290)。複数行の文は、改行を Enter として送ると
+    /// チャットでは途中で送信されてしまうので、貼り付けで入れる。1 行の文は、確定し直しと同じく 1 回の SendInput で送る。
+    /// </summary>
+    public void InsertSnippet(int count, string text)
+    {
+        if (!InputAllowed()) return;
+        if (text.Contains('\n'))
+        {
+            DeleteBackward(count);
+            EnsureSystemImeClosed();
+            if (TryPaste(text.ReplaceLineEndings("\r\n"))) return;
+            Diagnostics.Log.Warn("定型文を貼り付けられなかったので、1 文字ずつ送ります (改行は Shift+Enter)。");
+            foreach (var line in text.Split('\n').Select((line, i) => (line, i)))
+            {
+                if (line.i > 0) KeyInjector.SendShortcut(VirtualKeys.Shift, VirtualKeys.Return);
+                CommitText(line.line);
+            }
+            return;
+        }
+        ReplaceBackward(count, text);
+    }
+
+    /// <summary>
+    /// 確定し直し: BackSpace と新しい文字を 1 回の SendInput でまとめて送る (間に物理キーやほかの入力が割り込まないように。issue #227)。
+    /// 貼り付けで入れるアプリでは、消してから貼り付ける。
+    /// </summary>
+    public void ReplaceBackward(int count, string text)
+    {
+        if (count <= 0 || PasteCommit())
+        {
+            DeleteBackward(count);
+            CommitText(text);
+            return;
+        }
+        if (_window.Visible) _committedWhileVisible += text;
+        EnsureSystemImeClosed();
+        for (var i = 0; i < count; i++) KeyReplayed?.Invoke(new KeyEvent(VirtualKeys.Back, 0, false, false, false, 0));
+        var inputs = new List<Native.INPUT>(count * 2 + text.Length * 2);
+        for (var i = 0; i < count; i++)
+        {
+            inputs.Add(KeyInput(VirtualKeys.Back, up: false));
+            inputs.Add(KeyInput(VirtualKeys.Back, up: true));
+        }
+        AddUnicodeText(inputs, text);
+        Native.SendAll(inputs.ToArray(), "確定し直し");
     }
 
     public void RequestSurroundingText(Action<string?, string?> callback)
@@ -466,18 +610,48 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// 入力モード (日本語なら「あ」、英数なら「A」) をカーソルの近くに一瞬出す。どのスレッドから呼んでもよい。
     /// 変換ボックスが出ているときは出さない。
     /// </summary>
-    public void ShowMode(bool japanese)
+    public void ShowMode(bool japanese, uint inputThread = 0, Point? inputAnchor = null)
     {
         if (!_invoker.IsHandleCreated || _invoker.IsDisposed) return;
         _invoker.BeginInvoke(() => Safely(() =>
         {
             if (!_showIndicator() || _window.Visible) return;
-            var anchor = FindAnchor();
+            // TSF の通知が届くまでに別の入力先へ移っていたら表示しない。
+            if (inputThread != 0 && IME.ImeTarget.FromForeground()?.ThreadId != inputThread) return;
+            var anchor = inputAnchor ?? (inputThread == 0 ? FindAnchor() : FindImeIndicatorAnchor());
+            var (jp, direct, text) = _indicatorColors();
+            _indicator.SetColors(Config.Settings.ParseColor(jp), Config.Settings.ParseColor(direct), Config.Settings.ParseColor(text));
             _indicator.Flash(japanese, new Point(anchor.X + 2, anchor.Y + 2));
         }));
     }
 
+    private Point FindImeIndicatorAnchor()
+    {
+        if (FindCaret() is { } caret) return new Point(caret.Left, caret.Bottom + 4);
+        // 空の入力欄とは限らないため、入力欄の左上をキャレット位置と推測しない。
+        Native.GetCursorPos(out var cursor);
+        return new Point(cursor.X + 12, cursor.Y + 20);
+    }
+
     public bool IsShiftDown() => (Native.GetAsyncKeyState(VirtualKeys.Shift) & 0x8000) != 0;
+
+    /// <summary>クリップボードの文字 (変換した瞬間に 1 回だけ読む)。履歴に残さない印のある内容 (パスワード管理ソフトなど) は読まない。</summary>
+    public string? ClipboardText
+    {
+        get
+        {
+            try
+            {
+                if (!System.Windows.Forms.Clipboard.ContainsText()) return null;
+                if (System.Windows.Forms.Clipboard.ContainsData("ExcludeClipboardContentFromMonitorProcessing")) return null;
+                return System.Windows.Forms.Clipboard.GetText();
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or ThreadStateException)
+            {
+                return null;
+            }
+        }
+    }
 
     /// <summary>入力位置の高さとして信じる上限 (ピクセル)。これより高いのは入力欄や行全体の四角形。</summary>
     private const int MaxLineHeight = 48;
@@ -485,10 +659,24 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
     /// <summary>変換ボックスを出したまま確定した文字 (次に見せるときに、その幅だけ変換ボックスを右へずらす)。</summary>
     private string _committedWhileVisible = "";
 
+    /// <summary>Zenzai の今の状態 (トレイのメニューに出す)。OFF なら null。</summary>
+    public string? ZenzaiStatus(bool useZenzai, string serverPath, string modelPath) =>
+        !useZenzai ? null
+        : serverPath.Trim().Length == 0 || modelPath.Trim().Length == 0 ? "llama-server かモデルの場所が指定されていません"
+        : _zenzai.Status ?? "まだ起動していません (日本語を変換すると起動します)";
+
     public void Show(CompositionView view)
     {
         if (_window.Visible)
         {
+            // Windows の検索の画面の横に出しているときは、確定しても動かさない。左なら右の端を、上なら下の端をそろえる (広がっても検索の画面の裏に入らないように)
+            if (_beside != BesideSearch.None)
+            {
+                _committedWhileVisible = "";
+                if (_beside == BesideSearch.Left) _window.ShowView(view, new Point(_window.Left, _window.Top), rightEdge: _searchLeftEdge);
+                else _window.ShowView(view, null);
+                return;
+            }
             // 確定した文字の分だけ右へ (同じ位置のままだと、確定した文字を変換ボックスが隠してしまう: issue #57)。
             // 入力欄のキャレットは確定した文字の入力が終わるまで動かないことがあるので、確定した文字の幅で動かす。
             // 改行を含むとき・右へずらすと画面の外に出るとき (折り返し) は、ずらさずに入力欄のキャレットの位置を取り直す。
@@ -508,7 +696,15 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             }
         }
         _committedWhileVisible = "";
+        _beside = BesideSearch.None;
         var caret = FindCaret();
+        // どのモニターにも入らない入力位置 (フォーカスを失った窓の -32000 など) は、分からないものとして扱う。
+        // そのまま使うと、そこから決めた拡大率・文字の大きさ・位置で、変換ボックスが画面の外や画面より大きく出て見えなくなった (issue #1138)
+        if (caret is { } outside && !Screen.AllScreens.Any(screen => screen.Bounds.Contains(outside.Location)))
+        {
+            Diagnostics.Log.Info($"変換ボックスを出す入力位置がどのモニターにも入らないので、分からないものとして扱います: {outside.X},{outside.Y} 高さ {outside.Height}");
+            caret = null;
+        }
         // 入力欄が空のとき、アプリによっては入力位置ではなく入力欄の枠 (40px の欄など) や、複数行の欄全体の四角形が返る。
         // 枠と同じ高さなら、文字の高さは枠のおよそ半分 (1 行の欄の文字は上下の真ん中にある)。高すぎる四角形は、文字の高さが分からない。
         var element = Focus.Current.Bounds;
@@ -523,28 +719,49 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         Diagnostics.Log.Info($"変換ボックスを出す入力位置: {(caret is { } r ? $"{r.X},{r.Y} 高さ {r.Height}{(wholeField ? " (入力欄の枠)" : "")}" : "分からない")}");
         _window.SetFontFamily(_font());
         _window.SetAppearance(_lightTheme(), _opacity());
+        // 出すモニターの拡大率に合わせる (入力位置のモニター。分からなければ変換ボックスを置く位置のモニター)
+        var monitorScale = MonitorScale(caret?.Location ?? FindAnchor(caret, caretSearched: true));
+        _window.SetMonitorScale(monitorScale);
         // 文字の大きさ: 自動なら、入力欄の文字の高さに合わせる。小さな入力欄で大きく出すぎないように。
+        // 入力位置の高さはそのモニターのピクセルなので、拡大率の分を除いてから比べる
         _window.SetScale(_size() switch
         {
             Config.CompositionSize.Small => 0.8F,
             Config.CompositionSize.Large => 1.25F,
             Config.CompositionSize.ExtraLarge => 1.6F,
             Config.CompositionSize.Huge => 2F,
-            Config.CompositionSize.Auto when textHeight is { } h && h >= 8 => Math.Clamp((float)h / _window.BaseTextHeight, 0.7F, 1.4F),
+            Config.CompositionSize.Auto when textHeight is { } h && h >= 8 => Math.Clamp(h / (_window.BaseTextHeight * monitorScale), 0.7F, 1.4F),
             // 文字の高さが分からないときは、ふつうの画面の文字 (16px 前後) に近い大きさ
             Config.CompositionSize.Auto => 0.8F,
             _ => 1F,
         });
-        // Windows の検索・スタートメニューは、ふつうのアプリより上の特別な層に出るので、変換ボックスが隠れてしまう。
-        // 検索の画面の右に出す。
+        // Windows の検索・スタートメニューは、ふつうのアプリより上の特別な層に出るので、重なると変換ボックスが隠れてしまう。
+        // 検索の画面の左に入れば左、上に打った行が入れば上、どちらも入らなければ右に出す。
+        // Windows 11 の中央寄せのスタートは、検索の画面の右に「モバイル デバイス」の欄が並ぶので、右は最後にする
+        // (スタート・検索の窓は CoreWindow で EnumWindows に出てこないので、横に並ぶ窓を集めて避けることもできない)。
         if (ShellSearchBounds() is { } search)
         {
-            // 右に入らなければ左に出す (はみ出した分を画面の中に戻すと、スタートメニューの裏に隠れる)。
             var screen = Screen.FromRectangle(search).WorkingArea;
-            var width = _window.Width;
-            var left = search.Right + 8 + width <= screen.Right || search.Left - 8 - width < screen.Left ? search.Right + 8 : search.Left - 8 - width;
-            Diagnostics.Log.Info($"Windows の検索の画面: {search} (変換ボックスはその{(left > search.Left ? "右" : "左")}に出す)");
-            _window.ShowView(view, new Point(left, (caret?.Bottom ?? search.Bottom) - 4));
+            var size = _window.Measure(view);
+            if (search.Left - 8 - size.Width >= screen.Left)
+            {
+                Diagnostics.Log.Info($"Windows の検索の画面: {search} (変換ボックスはその左に出す)");
+                _beside = BesideSearch.Left;
+                _searchLeftEdge = search.Left - 8;
+                _window.ShowView(view, new Point(search.Left - 8 - size.Width, (caret?.Bottom ?? search.Top) - 4), rightEdge: _searchLeftEdge);
+            }
+            else if (search.Top - 8 - screen.Top >= _window.TextOffset.Y * 2)
+            {
+                // 候補まで入りきらなければ作業領域の上端に寄せる (打った行は見え、候補の下のほうは検索の画面の裏に入る)
+                Diagnostics.Log.Info($"Windows の検索の画面: {search} (変換ボックスはその上に出す)");
+                _beside = BesideSearch.Above;
+                _window.ShowView(view, new Point(search.Left, search.Top - 8), above: true, belowY: screen.Top);
+            }
+            else
+            {
+                Diagnostics.Log.Info($"Windows の検索の画面: {search} (変換ボックスはその右に出す)");
+                _window.ShowView(view, new Point(search.Right + 8, (caret?.Bottom ?? search.Top) - 4));
+            }
             return;
         }
         // 入力位置に重ねる: 変換ボックスの文字の行を、入力位置の行の高さの真ん中にそろえる。
@@ -562,12 +779,35 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             _window.ShowView(view, new Point(line.Left, line.Top - 4), above: true, belowY: FindAnchor(caret).Y);
             return;
         }
-        _window.ShowView(view, FindAnchor(caret));
+        _window.ShowView(view, FindAnchor(caret, caretSearched: true));
+    }
+
+    /// <summary>変換ボックスを Windows の検索の画面のどちら側に出しているか (検索の画面のときだけ)。</summary>
+    private enum BesideSearch { None, Left, Above }
+    private BesideSearch _beside;
+    /// <summary>検索の画面の左に出しているときの、変換ボックスの右の端。</summary>
+    private int _searchLeftEdge;
+
+    /// <summary>その点のモニターの DPI と、システムの DPI の比。取れなければ 1。</summary>
+    private static float MonitorScale(Point at)
+    {
+        try
+        {
+            var monitor = Native.MonitorFromPoint(new Native.POINT { X = at.X, Y = at.Y }, Native.MONITOR_DEFAULTTONEAREST);
+            var system = Native.GetDpiForSystem();
+            if (monitor == IntPtr.Zero || system == 0 || Native.GetDpiForMonitor(monitor, 0, out var dpi, out _) != 0 || dpi == 0) return 1F;
+            return (float)dpi / system;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return 1F;
+        }
     }
 
     public void Hide()
     {
         _committedWhileVisible = "";
+        _beside = BesideSearch.None;
         if (_window.Visible) _window.Hide();
     }
 
@@ -577,36 +817,17 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         "SearchHost", "SearchApp", "SearchUI", "StartMenuExperienceHost",
     };
 
-    /// <summary>
-    /// 前面が Windows の検索・スタートメニューなら、その画面の四角形。それ以外は null。
-    /// スタートメニューは、検索の欄 (SearchHost) と、その横の画面 (「モバイル デバイスを表示」の欄など、StartMenuExperienceHost) に
-    /// 分かれていることがあるので、同じ画面に出ている両方の窓を合わせた四角形にする (片方の右に出すと、もう片方の裏に隠れる、#18)。
-    /// </summary>
+    /// <summary>前面が Windows の検索・スタートメニューなら、その画面 (検索の欄のある窓) の四角形。それ以外は null。</summary>
     private static Rectangle? ShellSearchBounds()
     {
         var foreground = Native.GetForegroundWindow();
         if (!IsShellSearchWindow(foreground) || !Native.GetWindowRect(foreground, out var rect)) return null;
-        var bounds = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
-        var screen = Screen.FromRectangle(bounds).Bounds;
-        var union = bounds;
-        var shell = ShellSearchProcessIds();
-        Native.EnumWindows((hwnd, _) =>
-        {
-            Native.GetWindowThreadProcessId(hwnd, out var pid);
-            if (hwnd != foreground && shell.Contains(pid) && Native.IsWindowVisible(hwnd) && !IsCloaked(hwnd) && Native.GetWindowRect(hwnd, out var r))
-            {
-                var other = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
-                // 画面の外に置いてある窓・大きさの無い窓・画面全体の窓 (隠れている検索の画面) は含めない
-                if (other.Width > 0 && other.Height > 0 && screen.IntersectsWith(other) && other != screen) union = Rectangle.Union(union, Rectangle.Intersect(other, screen));
-            }
-            return true;
-        }, IntPtr.Zero);
-        return union;
+        return Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
     }
 
     private static bool IsShellSearchWindow(IntPtr hwnd)
     {
-        Native.GetWindowThreadProcessId(hwnd, out var processId);
+        if (Native.GetWindowThreadProcessId(hwnd, out var processId) == 0) return false;
         try
         {
             using var process = System.Diagnostics.Process.GetProcessById((int)processId);
@@ -617,24 +838,6 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
             return false;
         }
     }
-
-    private static HashSet<uint> ShellSearchProcessIds()
-    {
-        var ids = new HashSet<uint>();
-        foreach (var name in ShellSearchProcesses)
-        {
-            foreach (var process in System.Diagnostics.Process.GetProcessesByName(name))
-            {
-                ids.Add((uint)process.Id);
-                process.Dispose();
-            }
-        }
-        return ids;
-    }
-
-    /// <summary>見えない窓 (スタートメニューを閉じているときの窓など) は、表示中でも DWM が「隠している」(cloaked)。</summary>
-    private static bool IsCloaked(IntPtr hwnd) =>
-        Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0 && cloaked != 0;
 
     /// <summary>
     /// キャレット (入力位置) の画面上の四角形。Windows のキャレット (メモ帳など) → UI Automation (Chrome・Discord など) の順に試す。
@@ -655,21 +858,55 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         return Focus.CaretBounds() is { Width: > 0, Height: > 0 and < 200 } bounds && (bounds.X != 0 || bounds.Y != 0) ? bounds : null;
     }
 
-    /// <summary>変換ボックスを入力位置の下に出すときの位置。キャレット → 入力欄の左下 → マウスカーソルの順に試す。</summary>
-    private Point FindAnchor(Rectangle? caret = null)
+    /// <summary>
+    /// 変換ボックスを入力位置の下に出すときの位置。キャレット → 入力欄の左下 → マウスカーソルの順に試す。
+    /// caretSearched なら、キャレットは探し済み (caret が null なら取れなかった) として探し直さない (FindCaret は最大 60ms 待つ)。
+    /// </summary>
+    private Point FindAnchor(Rectangle? caret = null, bool caretSearched = false)
     {
-        if ((caret ?? FindCaret()) is { } found) return new Point(found.Left, found.Bottom + 4);
+        if ((caretSearched ? caret : caret ?? FindCaret()) is { } found) return new Point(found.Left, found.Bottom + 4);
         // 入力欄の四角形が潰れている・画面の外にある (Google ドキュメントの、文字を受け取るための見えない欄など) ときは、
         // その左下に出すと画面の端や関係ない所に出てしまう (issue #128)。マウスカーソルの近くに出す。
         if (Focus.Current.Bounds is { } bounds && bounds.Height is > 2 and < 120 && bounds.Width > 2 && IsOnScreen(bounds))
         {
             return new Point(bounds.Left, bounds.Bottom + 2);
         }
+        // 複数行の欄 (Chrome の textarea など) は、空のときに入力位置が取れない。空の欄で打ち始めるのは左上なので、そこに出す
+        // (マウスカーソルの近くに出すと、欄の右下や別のモニターなど、打っている所から離れた所に出ていた)。
+        if (Focus.Current.Bounds is { } field && field.Height >= 120 && field.Width > 2 && IsOnScreen(field))
+        {
+            return new Point(field.Left, Math.Max(field.Top, Screen.FromRectangle(field).WorkingArea.Top) + 2);
+        }
         Native.GetCursorPos(out var cursor);
         return new Point(cursor.X + 12, cursor.Y + 20);
     }
 
     private static bool IsOnScreen(Rectangle bounds) => Screen.AllScreens.Any(s => s.Bounds.IntersectsWith(bounds));
+
+    /// <summary>仮想キーの打鍵 (確定し直しの BackSpace)。KeyInjector と同じく、Meltype が送ったキーの印を付ける。</summary>
+    private static Native.INPUT KeyInput(int vk, bool up) => new()
+    {
+        type = Native.INPUT_KEYBOARD,
+        u = new Native.InputUnion
+        {
+            ki = new Native.KEYBDINPUT
+            {
+                wVk = (ushort)vk,
+                dwFlags = up ? Native.KEYEVENTF_KEYUP : 0,
+                dwExtraInfo = KeyboardMonitor.InjectedMarker,
+            },
+        },
+    };
+
+    /// <summary>文字列を 1 文字ずつ (押す・離す) の打鍵にして足す。</summary>
+    private static void AddUnicodeText(List<Native.INPUT> inputs, string text)
+    {
+        foreach (var c in text)
+        {
+            inputs.Add(UnicodeInput(c, up: false));
+            inputs.Add(UnicodeInput(c, up: true));
+        }
+    }
 
     private static Native.INPUT UnicodeInput(char c, bool up) => new()
     {
@@ -693,6 +930,7 @@ internal sealed class CompositionService : ICompositionHost, IDisposable
         _converter.Dispose();
         _windowsCandidates.Dispose();
         _mozc.Dispose();
+        _zenzai.Dispose();
         _window.Dispose();
         _indicator.Dispose();
     }

@@ -20,12 +20,13 @@ Meltype は「入力ソース」(日本語入力、IBus のエンジン・fcitx5
   5. 画面右上の入力ソースのメニュー (または Super + Space) で Meltype を選ぶ
   fcitx5 のとき (fcitx5 が入っていれば、install.sh が fcitx5 にも入れます。fcitx5 だけに入れるなら bash install.sh --fcitx5):
   3. fcitx5 の設定 (fcitx5-configtool) →「入力メソッド」で Meltype を追加する
+     (「新しい Meltype を読み込ませられませんでした」と出たら、ログアウトしてログインし直してから追加する)
   4. Ctrl + Space などで Meltype に切り替える
 
 ■ 使い方
   ・ふつうにローマ字で打つと日本語、英単語 (google、github …) は英字のまま
   ・Space で変換、Enter で確定、← → で文節を選ぶ、Esc で取り消し
-  ・F6 ひらがな / F7 カタカナ / F9 全角英数 / F10 半角英数
+  ・F6 ひらがな / F7 カタカナ / F8 半角カタカナ / F9 全角英数 / F10 半角英数
   ・半角/全角 キーで英数 ⇔ 日本語
   ・設定と学習データは ~/.local/share/Meltype にあります (config.json は Windows 版と同じ形式)
 

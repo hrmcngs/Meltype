@@ -73,6 +73,16 @@ struct SessionResult: Decodable {
 struct TextEdit: Decodable {
     let deleteBefore: Int
     let text: String
+    let expect: String?
+}
+
+// DeleteBefore uses UTF-16 units, matching .NET string lengths and AppKit ranges.
+func matchesExpectedText(_ actual: String?, expected: String?, deleteBefore: Int) -> Bool {
+    guard deleteBefore > 0,
+          let expected,
+          (expected as NSString).length == deleteBefore,
+          actual == expected else { return false }
+    return true
 }
 
 struct CompositionView: Decodable {
@@ -151,6 +161,20 @@ final class NativeCore {
     func commit(_ session: UnsafeMutableRawPointer?) -> SessionResult? {
         guard let commitFunction else { return nil }
         return decode(commitFunction(session))
+    }
+
+    /// 元の複数スカラーのイベントをアプリに渡す前に、未確定の内容だけ確定する。
+    /// 結合文字から始まるイベントは、1 スカラーの場合と同じく直前の文字との境界を保つ。
+    func commitBeforeExternalText(_ session: UnsafeMutableRawPointer?, text: String) -> SessionResult? {
+        if let first = text.unicodeScalars.first {
+            switch first.properties.generalCategory {
+            case .nonspacingMark, .spacingMark, .enclosingMark:
+                return handleKey(session, vk: 0x07, character: Int32(first.value), modifiers: 0, before: nil, after: nil)
+            default:
+                break
+            }
+        }
+        return commit(session)
     }
 
     func selectCandidate(_ session: UnsafeMutableRawPointer?, index: Int) -> SessionResult? {

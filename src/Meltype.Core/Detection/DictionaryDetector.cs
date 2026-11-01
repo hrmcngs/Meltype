@@ -9,15 +9,10 @@ namespace Meltype.Detection;
 /// </summary>
 public sealed class DictionaryDetector
 {
-    public WordList Words { get; } = new();
+    public WordList Words { get; }
 
-    public DictionaryDetector(IEnumerable<string> canonicalWords, RomajiDetector romaji)
-    {
-        foreach (var word in canonicalWords)
-        {
-            foreach (var variant in romaji.SpellingVariants(word)) Words.Add(variant);
-        }
-    }
+    public DictionaryDetector(IEnumerable<string> canonicalWords, RomajiDetector romaji) =>
+        Words = new(canonicalWords.SelectMany(word => romaji.SpellingVariants(word)));
 
     public bool IsPrefix(string letters) => Words.HasPrefix(letters);
 
@@ -39,8 +34,8 @@ public sealed class DictionaryDetector
         }
     }
 
-    private static readonly string[] Particles = ["no", "ga", "wo", "ni", "de", "to", "ha", "mo", "wa", "he"];
+    private static readonly string[] Particles = ["no", "ga", "wo", "ni", "de", "to", "ha", "mo", "wa", "he", "ya"];
 
-    /// <summary>助詞 (の が を に で と は も わ へ) で始まっていれば、その助詞。</summary>
+    /// <summary>助詞 (の が を に で と は も わ へ や) で始まっていれば、その助詞。</summary>
     public static string? StartsWithParticle(string letters) => Particles.FirstOrDefault(letters.StartsWith);
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Yukishiro
+// Copyright (C) 2026 hrmcngs
 
 using System.Text;
 using Meltype.Detection;
@@ -13,16 +13,18 @@ internal static class EnglishPhraseSpacing
     private static Dictionary<string, int[]> Load()
     {
         var result = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-        foreach (var line in DictionarySource.ReadEmbedded("english-phrases.txt").Split('\n'))
+        foreach (var line in DictionarySource.DataLines(DictionarySource.ReadEmbedded("english-phrases.txt")))
         {
-            if (line.StartsWith('#')) continue;
-            var fields = line.TrimEnd('\r').Split('\t');
+            var fields = line.Split('\t');
             if (fields.Length != 2) continue;
             var words = fields[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (string.Concat(words) == fields[0]) result[fields[0]] = words.Select(word => word.Length).ToArray();
         }
         return result;
     }
+
+    /// <summary>つなげて打った英語の決まり文句 (seeyou、thankyou) か。</summary>
+    public static bool IsPhrase(string token) => Boundaries.ContainsKey(token);
 
     public static string Format(string text)
     {

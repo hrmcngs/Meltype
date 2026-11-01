@@ -26,6 +26,19 @@ function Test-MeltypeImeRegistered {
     return Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\CTF\TIP\{417D801B-A9BD-4C26-BD16-356A825A6998}'
 }
 
+# DLL の登録 (InprocServer32) が 64 ビット・32 ビットの両方にあり、その DLL があるか。
+# TIP のキーだけ残り、これが無いことがある (セキュリティソフトが登録を途中で止めたとき)
+function Test-MeltypeImeServer {
+    foreach ($view in [Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32) {
+        $key = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view).OpenSubKey('SOFTWARE\Classes\CLSID\{417D801B-A9BD-4C26-BD16-356A825A6998}\InprocServer32')
+        if (-not $key) { return $false }
+        try { $dll = $key.GetValue('') }
+        finally { $key.Dispose() }
+        if (-not $dll -or -not (Test-Path -LiteralPath $dll)) { return $false }
+    }
+    return $true
+}
+
 # 管理者として動かす処理。確かめてから使うまでの間にファイルをすり替えられないように、ユーザーが書き換えられない
 # Program Files の下に写してから、昇格する前に確かめたハッシュと比べ、合ったものだけで Register-Tip.ps1 を動かす。
 # この処理はファイルではなくコマンドとして渡す (ユーザーのフォルダーにあるスクリプトを、管理者として直接動かさない)
@@ -122,6 +135,12 @@ function Remove-MeltypeImeFromLanguageList {
 
 $MeltypeImeDeclinedKey = 'HKCU:\Software\Meltype'
 
+# 登録を断ったことを覚える。自動更新と、Meltype.exe が起動したときには聞かない (Install.cmd を自分で実行したときは聞く)
+function Set-MeltypeImeDeclined {
+    New-Item -Path $MeltypeImeDeclinedKey -Force | Out-Null
+    Set-ItemProperty -LiteralPath $MeltypeImeDeclinedKey -Name ImeDeclined -Value 1 -Type DWord
+}
+
 # ファイルの SHA-256 (Get-FileHash は、ほかのシェルから起動した PowerShell では読み込めないことがあるので .NET で計算する)
 function Get-Sha256([string]$path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -132,6 +151,8 @@ function Get-Sha256([string]$path) {
 # 登録済みの DLL が、これから入れるものと同じか
 function Test-MeltypeImeCurrent([string]$Source) {
     if (-not (Test-MeltypeImeRegistered)) { return $false }
+    # 途中で止まった登録は、DLL が同じでも登録し直す
+    if (-not (Test-MeltypeImeServer)) { return $false }
     # 登録を外すときに使うスクリプト (Program Files に置いたもの) も同じか (DLL が同じでも、スクリプトを直したら置き直す)
     $installedScript = Join-Path $MeltypeProgramFiles 'Meltype\tip\Register-Tip.ps1'
     $newScript = Join-Path $Source 'Register-Tip.ps1'
@@ -213,10 +234,7 @@ function Install-MeltypeIme([string]$Source, [switch]$Ask) {
     if ($result -ne 'ok') {
         Write-Host 'Meltype IME を登録できませんでした。今までどおり、変換ボックスで入力する方式で使えます。'
         # UAC で断られたときだけ覚えて、自動更新では聞かない (失敗したときは、次の更新でまた試す)
-        if ($result -eq 'cancelled') {
-            New-Item -Path $MeltypeImeDeclinedKey -Force | Out-Null
-            Set-ItemProperty -LiteralPath $MeltypeImeDeclinedKey -Name ImeDeclined -Value 1 -Type DWord
-        }
+        if ($result -eq 'cancelled') { Set-MeltypeImeDeclined }
         return $false
     }
     Remove-ItemProperty -LiteralPath $MeltypeImeDeclinedKey -Name ImeDeclined -ErrorAction SilentlyContinue
