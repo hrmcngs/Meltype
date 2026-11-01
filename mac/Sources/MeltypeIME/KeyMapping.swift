@@ -11,16 +11,16 @@ enum KeyMapping {
     private static let otherCharacterKey: Int32 = 0x07
 
     /// 操作キーの characters は操作を表す特殊コードであり、入力文字ではない。
-    static func text(for event: NSEvent, virtualKey: Int32) -> String {
-        if (0x21...0x28).contains(virtualKey) || virtualKey == 0x2E || virtualKey == 0x0C || (0x70...0x83).contains(virtualKey) { return "" }
+    static func text(for event: NSEvent) -> String {
+        if operationVirtualKey(for: event.keyCode) != nil { return "" }
         return event.characters ?? ""
     }
 
-    static func virtualKey(for event: NSEvent) -> Int32? {
-        switch Int(event.keyCode) {
+    /// 操作キーの対応表。ここに追加したキーは必ず文字なしで本体に渡す。
+    private static func operationVirtualKey(for keyCode: UInt16) -> Int32? {
+        switch Int(keyCode) {
         case kVK_Return, kVK_ANSI_KeypadEnter: return 0x0D
         case kVK_Tab: return 0x09
-        case kVK_Space: return 0x20
         case kVK_Delete: return 0x08            // BackSpace
         case kVK_ForwardDelete: return 0x2E
         case kVK_ANSI_KeypadClear: return 0x0C
@@ -53,8 +53,13 @@ enum KeyMapping {
         case kVK_F18: return 0x81
         case kVK_F19: return 0x82
         case kVK_F20: return 0x83
-        default: break
+        default: return nil
         }
+    }
+
+    static func virtualKey(for event: NSEvent) -> Int32? {
+        if let key = operationVirtualKey(for: event.keyCode) { return key }
+        if Int(event.keyCode) == kVK_Space { return 0x20 }
         guard let scalar = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first else { return nil }
         switch scalar {
         case "a"..."z": return Int32(scalar.value) - 0x20   // A-Z = 0x41-0x5A

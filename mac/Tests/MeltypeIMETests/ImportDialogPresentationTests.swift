@@ -111,6 +111,31 @@ final class ImportDialogPresentationTests: XCTestCase {
         XCTAssertEqual(again.skipped, rows.count)
     }
 
+    func testImportWithNoValidEntriesFailsWithoutChangingDictionary() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("dictionary.plist")
+        let destination = directory.appendingPathComponent("userdict.txt")
+        let existing = "きぞん\t既存の語\n"
+        try existing.write(to: destination, atomically: true, encoding: .utf8)
+        let cases: [[[String: String]]] = [
+            [], [["unrelated": "value"]],
+            [["shortcut": "あくせす", "phrase": "アクセス\u{1B}X"]],
+            [["shortcut": "あ", "phrase": "短い読み"]],
+        ]
+        for rows in cases {
+            let data = try PropertyListSerialization.data(fromPropertyList: rows, format: .binary, options: 0)
+            try data.write(to: source)
+            XCTAssertThrowsError(try MacUserDictionary.importFile(source, directory: directory.path)) { error in
+                guard case MacUserDictionary.ImportError.unsupported = error else {
+                    return XCTFail("有効な項目がなければunsupportedを返す: \(error)")
+                }
+            }
+            XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), existing)
+        }
+    }
+
     func testImportFailureRestoresPolicyAndPreservesExistingDictionary() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

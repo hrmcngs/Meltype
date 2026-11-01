@@ -25,7 +25,7 @@ final class KeyMappingTests: XCTestCase {
                 let input = event(keyCode, String(UnicodeScalar(scalar)!), flags: flags)
                 let vk = KeyMapping.virtualKey(for: input)!
                 XCTAssertEqual(vk, expectedKey)
-                XCTAssertEqual(KeyMapping.text(for: input, virtualKey: vk), "")
+                XCTAssertEqual(KeyMapping.text(for: input), "")
             }
         }
     }
@@ -60,7 +60,7 @@ final class KeyMappingTests: XCTestCase {
                 let input = event(keyCode, String(UnicodeScalar(scalar)!), flags: flags)
                 let vk = KeyMapping.virtualKey(for: input)!
                 XCTAssertEqual(vk, expectedKey)
-                XCTAssertEqual(KeyMapping.text(for: input, virtualKey: vk), "")
+                XCTAssertEqual(KeyMapping.text(for: input), "")
             }
         }
     }
@@ -68,8 +68,8 @@ final class KeyMappingTests: XCTestCase {
     func testTextAndSpaceArePreserved() {
         for (keyCode, text) in [(kVK_ANSI_A, "a"), (kVK_ANSI_E, "e\u{301}"), (kVK_Space, " "), (kVK_ANSI_A, ""), (kVK_ANSI_A, "\u{E000}"), (kVK_ANSI_A, "👩‍💻")] {
             let input = event(keyCode, text)
-            let vk = KeyMapping.virtualKey(for: input)!
-            XCTAssertEqual(KeyMapping.text(for: input, virtualKey: vk), text)
+            XCTAssertNotNil(KeyMapping.virtualKey(for: input))
+            XCTAssertEqual(KeyMapping.text(for: input), text)
         }
     }
 }

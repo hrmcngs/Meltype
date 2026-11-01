@@ -26,7 +26,7 @@ enum MacUserDictionary {
                   !word.unicodeScalars.contains(where: isControl) else { return nil }
             return (reading, word)
         }
-        guard !rows.isEmpty else { throw ImportError.unsupported }
+        guard !entries.isEmpty else { throw ImportError.unsupported }
         return (entries, rows.count - entries.count)
     }
 
