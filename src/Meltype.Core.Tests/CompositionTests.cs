@@ -2336,6 +2336,57 @@ internal static class CompositionTests
     }
 
     [Test]
+    public static void EllipsisIsOfferedForTententenReading()
+    {
+        Assert.True(CandidateDictionary.Load(null).Lookup("てんてんてん").Contains("…"), "てんてんてん → …");
+        var k = new Keyboard();
+        k.Type("tenntenntenn");
+        k.Press(VirtualKeys.Space);
+        Assert.True(k.Host.View!.Candidates.Contains("…"), string.Join(",", k.Host.View.Candidates));
+    }
+
+    [Test]
+    public static void NamedSymbolsAreAvailableAsConversionCandidates()
+    {
+        foreach (var (raw, reading, symbol) in new[] {
+            ("sanntenn", "さんてん", "…"),
+            ("sanntennri-da-", "さんてんりーだー", "…"),
+            ("sanntennri-da", "さんてんりーだ", "…"),
+            ("nitennri-da-", "にてんりーだー", "‥"),
+            ("nitennri-da", "にてんりーだ", "‥"),
+            ("namidassyu", "なみだっしゅ", "〜"),
+            ("natyuraru", "なちゅらる", "♮"),
+            ("sessi", "せっし", "℃"),
+            ("mugenndai", "むげんだい", "∞"),
+            ("batu", "ばつ", "×"),
+            ("koronn", "ころん", "："),
+            ("semikoronn", "せみころん", "；"),
+            ("surassyu", "すらっしゅ", "／"),
+            ("bakkusurassyu", "ばっくすらっしゅ", "＼"),
+        })
+        {
+            Assert.True(CandidateDictionary.Load(null).LookupWords(reading).Contains(symbol), reading + " → " + symbol);
+            var k = new Keyboard();
+            k.Type(raw);
+            k.Press(VirtualKeys.Space);
+            Assert.True(k.Host.View!.Candidates.Contains(symbol), raw + ": " + string.Join(",", k.Host.View.Candidates));
+        }
+    }
+
+    [Test]
+    public static void SymbolConversionOffersEllipsisWithoutChangingLiteralPunctuation()
+    {
+        var k = new Keyboard();
+        k.Type("...");
+        k.Press(VirtualKeys.Space);
+        Assert.True(k.Host.View!.Candidates.Contains("…"), string.Join(",", k.Host.View.Candidates));
+        Assert.True(k.Host.View.Candidates.Contains("..."), "打ったままのピリオドも残す");
+        var literal = new Keyboard();
+        literal.Type("...\n");
+        Assert.Equal("...", literal.Host.Document);
+    }
+
+    [Test]
     public static void Issue495_MoreThanThreeSlashesExtendTheEllipsis()
     {
         var expected = new[] { (3, "…"), (4, "……"), (6, "……"), (7, "………") };

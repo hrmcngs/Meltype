@@ -93,7 +93,7 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
         // (補助面の文字・結合文字・ZWJ 絵文字・異体字セレクター)。1 要素へ切り詰めたり 0 に置き換えたりしない。
         // 1 スカラーならそのコードポイントのまま本体へ渡し、複数スカラーは未確定内容だけ確定して
         // 元のイベントを 1 回アプリへ通す (本体側の pass-through 契約と対にする)。
-        let text = KeyMapping.text(for: event, virtualKey: vk)
+        let text = KeyMapping.text(for: event)
         let scalars = Array(text.unicodeScalars)
         if scalars.count > 1 {
             apply(NativeCore.shared.commitBeforeExternalText(session, text: text), to: client)
@@ -257,8 +257,9 @@ final class MeltypeInputController: IMKInputController, ModeServiceTarget {
               let directory = NativeCore.shared.dataDirectory else { return }
         let alert = NSAlert()
         do {
-            let count = try MacUserDictionary.importFile(source, directory: directory)
-            alert.messageText = "ユーザー辞書に\(count)語を追加しました"
+            let result = try MacUserDictionary.importFile(source, directory: directory)
+            alert.messageText = "ユーザー辞書に\(result.added)語を追加しました"
+            alert.informativeText = "無効な項目・登録済みの項目を\(result.skipped)語飛ばしました。"
             NotificationCenter.default.post(name: Notification.Name("MeltypeUserDictionaryChanged"), object: nil)
         } catch {
             alert.messageText = "ユーザー辞書を取り込めませんでした"
