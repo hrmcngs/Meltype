@@ -1,0 +1,43 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'hrmcngs/Meltype'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch https://github.com/yksr-melt/Meltype.git main
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo '元リポジトリの main は取り込み済みです。' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git merge --no-edit FETCH_HEAD; then
+            git merge --abort
+            echo '競合したため同期を停止しました。手動での取り込みが必要です。' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          git push origin HEAD:main
+          echo '元リポジトリの main をフォークの main に取り込みました。' >> "$GITHUB_STEP_SUMMARY"
